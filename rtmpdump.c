@@ -130,6 +130,10 @@ static const AVal av_token = AVC("token");
 static const AVal av_playlist = AVC("playlist");
 static const AVal av_true = AVC("true");
 
+//added by fcicq
+static const AVal av_cmdinv = AVC("cmdinv");
+static const AVal av_cmdinvamf = AVC("cmdinvamf");
+
 int
 OpenResumeFile(const char *flvFile,	// file name [in]
 	       FILE ** file,	// opened file [out]
@@ -466,10 +470,10 @@ Download(RTMP * rtmp,		// connected RTMP object
   else
     {
       // print initial status
-      // Workaround to exit with 0 if the file is fully (> 99.9%) downloaded
+      // Workaround to exit with 0 if the file is fully (> 99.9%) downloaded or remaining part is less than 0.1s
       if (duration > 0)
 	{
-	  if ((double) rtmp->m_read.timestamp >= (double) duration * 999.0)
+	  if (((double) rtmp->m_read.timestamp >= (double) duration * 999.0) || ((double) rtmp->m_read.timestamp >= (double) duration * 1000.0 - 100.0))
 	    {
 	      RTMP_LogPrintf("Already Completed at: %.3f sec Duration=%.3f sec\n",
 			(double) rtmp->m_read.timestamp / 1000.0,
@@ -526,6 +530,11 @@ Download(RTMP * rtmp,		// connected RTMP object
 	      return RD_FAILED;
 	    }
 	  size += nRead;
+
+          if (dStopOffset && rtmp->m_read.timestamp >= (dStopOffset - dSeek))
+            {
+              break;
+            }
 
 	  //RTMP_LogPrintf("write %dbytes (%.1f kB)\n", nRead, nRead/1024.0);
 	  if (duration <= 0)	// if duration unknown try to get it from the stream (onMetaData)
@@ -585,14 +594,14 @@ Download(RTMP * rtmp,		// connected RTMP object
 #ifdef _DEBUG
 	  RTMP_Log(RTMP_LOGDEBUG, "zero read!");
 #endif
-	  if (rtmp->m_read.status == RTMP_READ_EOF)
+	  if (rtmp->m_read.status == RTMP_READ_EOF || rtmp->m_read.status == RTMP_READ_COMPLETE)
 	    break;
 	}
 
     }
   while (!RTMP_ctrlC && nRead > -1 && RTMP_IsConnected(rtmp) && !RTMP_IsTimedout(rtmp));
   free(buffer);
-  if (nRead < 0)
+  if (nRead <= 0)
     nRead = rtmp->m_read.status;
 
   /* Final status update */
@@ -622,10 +631,18 @@ Download(RTMP * rtmp,		// connected RTMP object
       return RD_FAILED;
     }
 
-  if (nRead == -3)
+  if (dStopOffset && rtmp->m_read.timestamp >= (dStopOffset - dSeek))
     return RD_SUCCESS;
 
-  if ((duration > 0 && *percent < 99.9) || RTMP_ctrlC || nRead < 0
+  if (nRead == RTMP_READ_COMPLETE)
+    return RD_SUCCESS;
+
+  if (duration > 0 && (((double) rtmp->m_read.timestamp >= (double) duration * 1000.0 - 100.0) || (double) rtmp->m_read.timestamp >= (double) duration * 999.0))
+    {
+      return RD_SUCCESS;
+    }
+
+  if ((duration > 0) || RTMP_ctrlC || nRead < 0
       || RTMP_IsTimedout(rtmp))
     {
       return RD_INCOMPLETE;
@@ -858,12 +875,14 @@ main(int argc, char **argv)
     {"quiet", 0, NULL, 'q'},
     {"verbose", 0, NULL, 'V'},
     {"jtv", 1, NULL, 'j'},
+    {"connext", 1, NULL, 'E'},
+    {"nlplaypath", 1, NULL, 'N'},
     {0, 0, 0, 0}
   };
 
   while ((opt =
 	  getopt_long(argc, argv,
-		      "hVveqzRr:s:t:i:p:a:b:f:o:u:C:n:c:l:y:Ym:k:d:A:B:T:w:x:W:X:S:#j:",
+		      "hVveqzRr:s:t:i:p:a:b:f:o:u:C:n:c:l:y:Ym:k:d:A:B:T:w:x:W:X:S:#j:E:N:",
 		      longopts, NULL)) != -1)
     {
       switch (opt)
@@ -1046,6 +1065,82 @@ main(int argc, char **argv)
 	    }
 	  }
 	  break;
+        case 'E': {
+          AVal av_extconn;
+          AVal av_extconnamf;
+          char *tmp_extconn;
+          STR2AVAL(av_extconn, strtok(optarg,","));
+          if (!RTMP_SetOpt(&rtmp, &av_cmdinv, &av_extconn))
+            RTMP_Log(RTMP_LOGERROR, "Set cmdinv failed");
+          if (strncmp(av_extconn.av_val, "nlPlayNotice", 13) == 0)
+            {
+              RTMP_Log(RTMP_LOGERROR, "nlPlayNotice found");
+              rtmp.Link.lFlags |= RTMP_LF_NOFS;
+            }
+          while ((tmp_extconn = strtok(NULL,"|")) != NULL)
+            {
+              STR2AVAL(av_extconnamf, tmp_extconn);
+              if (!RTMP_SetOpt(&rtmp, &av_cmdinvamf, &av_extconnamf))
+                RTMP_Log(RTMP_LOGERROR, "Invalid AMF parameter %.*s", av_extconnamf.av_len, av_extconnamf.av_val);
+            }
+          }
+          break;
+        case 'N': {
+          char *tmp_nltoken, *tmp_lvid_last=NULL, *tmp_lvid_first=NULL;
+          AVal av_nlPlayNotice;
+          STR2AVAL(av_nlPlayNotice, "nlPlayNotice");
+          AMFObjectProperty tmp_amfprop={{0,0}}, tmp_amfprop2={{0,0}};
+          RTMP_SetOpt(&rtmp, &av_cmdinv, &av_nlPlayNotice);
+          rtmp.Link.lFlags |= RTMP_LF_NOFS;
+          tmp_amfprop.p_type = AMF_STRING;
+          STR2AVAL(tmp_amfprop.p_vu.p_aval, strtok(optarg,","));
+          AMF_AddProp(&rtmp.Link.cmdInvokeamf, &tmp_amfprop);
+          tmp_nltoken = strtok(NULL, ",");
+          if (!tmp_nltoken)
+            {
+              RTMP_Log(RTMP_LOGERROR, "nltoken not found");
+            }
+          else
+            {
+              STR2AVAL(tmp_amfprop.p_vu.p_aval, tmp_nltoken);
+              AMF_AddProp(&rtmp.Link.cmdInvokeamf, &tmp_amfprop);
+              tmp_lvid_last = strchr(tmp_nltoken, '?');
+            }
+          if (!tmp_lvid_last)
+            {
+              RTMP_Log(RTMP_LOGERROR, "lvid not found");
+            }
+          else
+            {
+              tmp_lvid_first = strrchr(tmp_nltoken, '/');
+              tmp_amfprop2.p_type = AMF_NUMBER;
+              if (!tmp_lvid_first) //live
+                {
+                  tmp_amfprop.p_vu.p_aval.av_len = tmp_lvid_last - tmp_nltoken;
+                  AMF_AddProp(&rtmp.Link.cmdInvokeamf, &tmp_amfprop);
+                  tmp_amfprop2.p_vu.p_number = -2.0;
+                  AMF_AddProp(&rtmp.Link.cmdInvokeamf, &tmp_amfprop2);
+                }
+              else if (playpath.av_val)
+                {
+                  char *chroffset = strrchr(playpath.av_val, '_');
+                  if (chroffset)
+                    {
+                      STR2AVAL(tmp_amfprop.p_vu.p_aval, playpath.av_val);
+                      AMF_AddProp(&rtmp.Link.cmdInvokeamf, &tmp_amfprop);
+                      tmp_amfprop2.p_vu.p_number = strtod(chroffset+1, NULL);
+                      AMF_AddProp(&rtmp.Link.cmdInvokeamf, &tmp_amfprop2);
+                    }
+                  else
+                    {
+                      RTMP_Log(RTMP_LOGERROR, "playpath & offset not found");
+                    }
+                }
+              else
+                RTMP_Log(RTMP_LOGERROR, "playpath & offset not found #2");
+            }
+          }
+          break;
 	case 'm':
 	  timeout = atoi(optarg);
 	  break;
@@ -1395,9 +1490,14 @@ main(int argc, char **argv)
     }
   else if (nStatus == RD_INCOMPLETE)
     {
-      RTMP_LogPrintf
-	("Download may be incomplete (downloaded about %.2f%%), try resuming\n",
-	 percent);
+      if (bLiveStream)
+        RTMP_LogPrintf
+          ("Download may be incomplete (downloaded about %.2f%%)\n",
+           percent);
+      else
+        RTMP_LogPrintf
+          ("Download may be incomplete (downloaded about %.2f%%), try resuming\n",
+           percent);
     }
 
 clean:

@@ -760,7 +760,7 @@ HandShake(RTMP * r, int FP9HandShake)
 #else
   ip = (int32_t *)(clientsig+8);
   for (i = 2; i < RTMP_SIG_SIZE/4; i++)
-    *ip++ = rand();
+    *ip++ = ((rand() & 0xFFFF) << 16) | (rand() & 0xFFFF);
 #endif
 
   /* set handshake digest */
@@ -1099,7 +1099,7 @@ SHandShake(RTMP * r)
     {
       encrypted = FALSE;
     }
-  else if (type == 6 || type == 8)
+  else if (type == 6 || type == 8 || type == 9)
     {
       offalg = 1;
       encrypted = TRUE;
@@ -1148,7 +1148,7 @@ SHandShake(RTMP * r)
 #else
   ip = (int32_t *)(serversig+8);
   for (i = 2; i < RTMP_SIG_SIZE/4; i++)
-    *ip++ = rand();
+    *ip++ = ((rand() & 0xFFFF) << 16) | (rand() & 0xFFFF);
 #endif
 
   /* set handshake digest */

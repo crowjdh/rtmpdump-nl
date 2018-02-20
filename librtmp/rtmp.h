@@ -160,6 +160,10 @@ extern "C"
     AVal pubUser;
     AVal pubPasswd;
     AMFObject extras;
+
+    AVal cmdInvoke; //added by fcicq
+    AMFObject cmdInvokeamf;
+
     int edepth;
 
     int seekTime;
@@ -172,6 +176,7 @@ extern "C"
 #define RTMP_LF_BUFX	0x0010	/* toggle stream on BufferEmpty msg */
 #define RTMP_LF_FTCU	0x0020	/* free tcUrl on close */
 #define RTMP_LF_FAPU	0x0040	/* free app on close */
+#define RTMP_LF_NOFS	0x0080	/* don't send SendFCSubscribe */
     int lFlags;
 
     int swfAge;
